@@ -1,148 +1,169 @@
-LiDAR Lake
+LiDAR Lake: Comprehensive Technical Documentation
 
-<div align="center">
-<img src="logo.svg" alt="LiDAR Lake Logo" width="600">
+Project: Real-time LiDAR Processing & Analytics Lakehouse
 
+1. Executive Summary
 
+This project implements a Lambda Architecture for processing autonomous vehicle LiDAR data. It handles the high-velocity ingestion of 3D point clouds, performs real-time cleaning, transforms raw points into structured Voxels (3D cubes), and stores them in an ACID-compliant Data Lakehouse (Apache Iceberg).
 
+Beyond the core data pipeline, the project includes a robust Observability Layer (Prometheus & Grafana) to monitor system health and a Visualization Layer (CloudCompare) to validate data quality and semantic segmentation accuracy.
 
+2. Architecture Overview
 
-<h3>Real-time LiDAR Processing & Analytics Lakehouse</h3>
-</div>
+The system is composed of eight distinct layers, covering the lifecycle of data from sensor to insight:
 
-🚀 Executive Summary
+Ingestion Layer: Kafka (Streaming Storage & Decoupling).
 
-LiDAR Lake is a scalable, on-premise Data Lakehouse architecture designed to ingest, clean, and analyze high-volume LiDAR sensor data from autonomous vehicles. It addresses the critical challenges of Volume (1.3 GB/min per car), Noise (unstructured point clouds), and Cost (avoiding expensive cloud storage fees).
+Processing Layer: Flink (Stateful Stream Computation).
 
-By transforming raw .ply sensor streams into structured Voxels stored in Apache Iceberg, we enable real-time analytics, "Time Travel" debugging, and rapid AI model training.
+Storage Layer (Data Lake): HDFS (Raw, Distributed File Storage).
 
-🏗️ Architecture
+Lakehouse Layer: Spark + Iceberg (Voxelization & ACID Tables).
 
-The system follows a Lambda Architecture with distinct layers for speed and reliability.
+Orchestration Layer: Airflow (Workflow Management).
 
-graph LR
-    Sensors(LiDAR Sensors) -->|Raw Stream| Kafka(Apache Kafka)
-    Kafka -->|Ingest| Flink(Apache Flink)
-    Flink -->|Clean & Filter| HDFS(HDFS / MinIO)
-    HDFS -->|Batch Processing| Spark(Apache Spark)
-    Spark -->|Voxelization| Iceberg(Apache Iceberg)
-    Iceberg -->|Analytics| ML(TensorFlow Model)
-    Iceberg -->|Visualization| QGIS(QGIS & CloudCompare)
+Intelligence Layer: TensorFlow/Keras (Voxel Classification).
 
+Observability Layer: Prometheus & Grafana (System Monitoring).
 
-Key Components
+Visualization Layer: CloudCompare (Quality Control).
 
-Ingestion (Kafka): Decouples high-speed sensor data from processing to ensure zero data loss.
+3. Core Pipeline Implementation
 
-Streaming (Flink): Performs real-time cleaning (noise filtering) before data hits the disk.
+Layer 1: Ingestion (Kafka)
 
-Storage (HDFS/MinIO): Cost-effective, distributed raw storage.
+Component: Apache Kafka 3.9.0 (with Zookeeper)
 
-Lakehouse (Spark + Iceberg): transforms raw points into structured Voxels ($1m^3$ cubes) and provides ACID compliance + Time Travel.
+Role: While Kafka is a streaming platform, its primary role here is Ingestion and Durable Buffer. It stores the raw stream to ensure no data is lost if the processing layer (Flink) goes down.
 
-Intelligence (TensorFlow): A Neural Network trains on Voxel features (Intensity, Density) for spatial-invariant object detection.
+Script: src/producer.py
 
-Observability (Prometheus + Grafana): Monitors pipeline health (CPU, Memory, Ingestion Lag).
+Technical Implementation:
 
-🛠️ Tech Stack
+Utilized the plyfile library to parse binary .ply headers.
 
-Streaming: Apache Kafka, Apache Flink
+Serialized raw points into JSON payloads: {"x": 1.2, "y": 3.4, "z": 0.5, "intensity": 10...}.
 
-Processing: Apache Spark (PySpark)
+Simulation: Implemented a thread sleep delay (time.sleep(0.01)) between chunks to mimic the ~10Hz frequency of a rotating LiDAR sensor, avoiding a "batch dump" effect.
 
-Storage: Hadoop HDFS, MinIO (S3 Compatible)
+Layer 2: Stream Processing (Flink)
 
-Table Format: Apache Iceberg
+Component: Apache Flink 1.18.1
 
-Orchestration: Apache Airflow
+Role: The Computational Streaming Layer. It acts on the data while it is in motion.
 
-ML & Viz: TensorFlow, CloudCompare, QGIS
+Script: src/flink_cleaning.py
 
-Languages: Python 3.10, Java 17
+Technical Implementation:
 
-📦 Installation & Setup
+Connector: Used flink-sql-connector-kafka-3.1.0-1.18.jar to consume the lidar-raw topic.
 
-Prerequisites
+Checkpointing: Crucial technical fix. We enabled env.enable_checkpointing(5000) (5 seconds). Without this, Flink's file sink kept files in an open .inprogress state (hidden), preventing downstream tools from reading them.
 
-Linux Environment (Ubuntu/Xubuntu recommended)
+Logic: Filtered out noise points (Label 0) using Flink SQL (WHERE label <> 0).
 
-Java 17 (Required for Spark 3.5 + Iceberg)
+Layer 3: The Data Lake (HDFS)
 
-Python 3.10+
+Component: Hadoop HDFS (Raw Storage)
 
-1. Clone the Repository
+Technical Implementation:
 
-git clone [https://github.com/yourusername/lidar-lake.git](https://github.com/yourusername/lidar-lake.git)
-cd lidar-lake
+Flink writes Rolling Files to this layer based on size (128MB) or time (1 minute).
 
+Serves as the "Landing Zone" for clean data before heavy batch processing.
 
-2. Install Dependencies
+Why HDFS: Provides high throughput for the Spark batch jobs in the next layer.
 
-pip install -r requirements.txt
-# Key libraries: pyspark==3.5.3, kafka-python, plyfile, tensorflow
+Layer 4: The Lakehouse (Spark & Iceberg)
 
+Component: Apache Spark 3.5 + Apache Iceberg
 
-3. Start Infrastructure (Local Mode)
+Script: src/spark_voxel_job.py
 
-If running locally, start your Zookeeper, Kafka, and Flink instances:
+Technical Implementation:
 
-# Start Zookeeper
-./kafka/bin/zookeeper-server-start.sh config/zookeeper.properties
+Voxelization Logic: We used Spark SQL functions to round coordinates to integers: withColumn("voxel_x", round(col("x"), 0).cast("int")). This aggregates points into $1m^3$ grids.
 
-# Start Kafka
-./kafka/bin/kafka-server-start.sh config/server.properties
+Schema Inference: Utilized createOrReplace() to automatically infer the Iceberg schema from the Spark DataFrame, avoiding manual DDL statements.
 
-# Start Flink
-./flink/bin/start-cluster.sh
+Partitioning: Configured partitionedBy("majority_label"). This physically separates data folders (e.g., label=7/), allowing partition pruning.
 
+Layer 5: Orchestration (Airflow)
 
-🚀 Usage Guide
+Component: Apache Airflow (DAG Definition)
 
-Step 1: Ingest Data (Producer)
+Script: src/lidar_pipeline.py
 
-Simulate a LiDAR sensor stream from a .ply file.
+Technical Implementation:
 
-python3 src/producer.py
+Defined a DAG (Directed Acyclic Graph) with dependencies: flink_cleaning >> spark_voxelization >> export_to_qgis (or cloud compare).
 
+Used BashOperator to execute the Python scripts.
 
-Step 2: Clean Data (Flink)
+Environment Management: We had to explicitly inject JAVA_HOME into the Airflow command strings (export JAVA_HOME=... && python3 ...) because the Airflow worker environment often differs from the user shell.
 
-Start the streaming job to filter noise and write JSON to HDFS.
+Layer 6: Machine Learning (TensorFlow)
 
-python3 src/flink_cleaning.py
+Component: TensorFlow/Keras
 
+Script: src/ml_voxel_classifier.py
 
-Step 3: Process to Lakehouse (Spark)
+Technical Implementation:
 
-Run the batch job to Voxelize data and write to Iceberg.
+Data Loading: Instead of using file paths, the script connects to the Iceberg Catalog: spark.read.table("local.lidar.voxels").
 
-# Ensure Java 17 is set
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-python3 src/spark_voxel_job.py
+Preprocessing: Used StandardScaler to normalize intensity and color values (0-255 -> 0-1) and to_categorical for one-hot encoding labels (0-8).
 
+Model Architecture: A Feed-Forward Neural Network (Dense Layers 64 -> 128 -> 64) with ReLU activation.
 
-Step 4: Export for Visualization
+Constraint: We explicitly excluded x and y coordinates from training to prevent the model from overfitting to specific locations (Spatial Invariance).
 
-Generate a CSV for QGIS or CloudCompare.
+4. Observability & Monitoring Layer (The Team Contribution)
 
-python3 src/export_for_qgis.py
+To ensure system stability, we implemented a monitoring stack using Prometheus and Grafana.
 
+A. Infrastructure Setup
 
-Step 5: Train AI Model
+Node Exporter: Installed on the host VM to expose hardware metrics. We had to open firewall port 9100 using sudo firewall-cmd --add-port=9100/tcp.
 
-Train the neural network on the structured Voxel data.
+Prometheus: Configured via prometheus.yml to scrape targets every 15s. Accessed on port 9090.
 
-python3 src/ml_voxel_classifier.py
+Grafana: Connected to Prometheus as a data source on port 3000.
 
+B. Key Technical Metrics (PromQL)
 
-📊 Results
+We crafted specific queries to monitor pipeline health:
 
-Compression: Reduced raw point cloud size by ~90% via Voxelization.
+CPU Usage:
 
-Performance: Achieved sub-second query latency for specific object classes (e.g., "Select all Cars") using Partition Pruning.
+100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
 
-Cost: Eliminated cloud storage fees by utilizing on-premise commodity hardware.
 
-👥 Team G13
+Insight: Used to detect when Spark jobs spiked CPU to 100%.
 
-**Mostafa
+Available Memory:
+
+node_memory_MemAvailable_bytes
+
+
+Insight: Critical for preventing OOM (Out of Memory) kills during Flink processing.
+
+Disk Space: node_filesystem_avail_bytes to monitor the HDFS/MinIO volume growth.
+
+5. Visualization & Quality Control Layer
+
+We utilized CloudCompare as a ground-truth verification tool for both the raw sensor data and the AI model outputs.
+
+A. Technical Workflow
+
+Global Shift: Upon import, we had to apply a "Global Shift" to the coordinates because the raw UTM values were too large for standard 32-bit float rendering (causing the "jittering" effect).
+
+Scalar Fields: We manually imported the Mavericks_classes_9.txt label file to map integer IDs (0-8) to human-readable names (Road, Car, etc.).
+
+Clipping Fix: We adjusted the camera "Near Clipping Plane" in display settings to prevent close-up geometry from disappearing during inspection.
+
+B. Value for AI Team
+
+This layer was not just for pretty pictures; it was a debugging tool for the AI team:
+
+Visual Validation: By overlaying the "Predicted Label" color map against the "True Label" color map, we could visually identify edge cases where the model failed (e.g., misclassifying the edge of a sidewalk as a fence).
