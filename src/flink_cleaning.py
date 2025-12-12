@@ -67,7 +67,7 @@ def run_cleaning_job():
         )
     """)
 
-    # 6. Transformation (FILTER REMOVED for debugging)
+    # 6. Transformation 
     t_env.execute_sql("""
         INSERT INTO hdfs_sink
         SELECT 
