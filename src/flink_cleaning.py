@@ -76,7 +76,7 @@ def run_cleaning_job():
             intensity, `timestamp`, scan_angle, 
             label
         FROM raw_lidar_stream
-        -- WHERE label <> 0  <-- COMMENTED OUT TO DEBUG
+          WHERE label <> 0 
     """).wait()
 
 if __name__ == "__main__":
